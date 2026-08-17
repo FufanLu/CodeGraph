@@ -210,6 +210,7 @@ def read_store(root):
     if not isinstance(payload, dict) or not isinstance(payload.get("nodes"), list):
         raise GraphUnavailable(f'{STORE_PATH} has the wrong shape: expected {{"nodes": [...]}}')
     payload.setdefault("edges", [])
+    payload.setdefault("changes", [])
     payload.setdefault("project", root.name)
     return payload
 

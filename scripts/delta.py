@@ -216,12 +216,37 @@ def validate(current, marker, require_file=False):
     }
 
 
-def apply(store, plan):
+def describe(plan):
+    """Flatten a plan into change rows, in the order they will be applied.
+
+    These are what the structure map's "Recent changes" section reads. Current shape alone
+    cannot tell a reader whether a node arrived with the last piece of work or has been
+    there for months, and those two facts mean opposite things when deciding whether to
+    touch it.
+    """
+    rows = []
+    for spec in plan["remove_edges"]:
+        rows.append(("remove", "edge", f"{spec['from']}>{spec['kind']}>{spec['to']}"))
+    for path in plan["remove_nodes"]:
+        rows.append(("remove", "node", path))
+    for spec in plan["add_nodes"]:
+        rows.append(("add", "node", spec["path"]))
+    for spec in plan["add_edges"]:
+        rows.append(("add", "edge", f"{spec['from']}>{spec['kind']}>{spec['to']}"))
+    # Addressed by slug path, never by an internal id: the path is what the writer used to
+    # declare the change and what a reader can look up afterwards.
+    return [{"op": op, "target_kind": kind, "target_ref": ref} for op, kind, ref in rows]
+
+
+def apply(store, plan, stamp=None, history_limit=50):
     """Apply a validated plan, returning a new graph (the input is left alone).
 
     **Removals happen before additions, and that is load-bearing**: it is what lets one
     delta replace `server/legacy` with `server/store`. In the other order the new node
     collides with the old one before it has gone.
+
+    `stamp` is merged into every recorded change — a timestamp and, where there is one, the
+    commit the work sat on.
     """
     nodes = {node["path"]: dict(node) for node in store.get("nodes", [])}
     order = [node["path"] for node in store.get("nodes", [])]
@@ -256,9 +281,15 @@ def apply(store, plan):
         if not any(same(edge, spec) for edge in edges):
             edges.append({"from": spec["from"], "to": spec["to"], "kind": spec["kind"]})
 
+    # Newest first, and capped: this is a "what happened lately" list, not an audit log.
+    # An unbounded one would grow without ever being read past its first few entries.
+    recorded = [{**row, **(stamp or {})} for row in describe(plan)]
+    history = recorded + list(store.get("changes", []))
+
     return {
         "schema_version": SCHEMA_VERSION,
         "project": store.get("project", ""),
         "nodes": [nodes[path] for path in order],
         "edges": edges,
+        "changes": history[:history_limit],
     }

@@ -15,6 +15,9 @@ part for*, and *what breaks if I change it*.
 
 ## Reading the graph
 
+- **`map`** — the whole design at its top level, plus what changed recently. This is the
+  index: read it before exploring, then open what you need. When the hook below is
+  installed it arrives on its own and you rarely need to ask for it.
 - **`find`** — locate nodes by keyword across title, summary, path and file. Multiple
   keywords are ANDed. Start here when you do not know a node's path.
 - **`show`** — one node's kind, title, summary, file, direct children, what it depends on,
@@ -96,3 +99,37 @@ claude mcp add --scope user code-graph \
 Python 3 and its standard library are the only requirements — nothing to install, no service
 to run. The server works on whatever repository the session is in; `--repo <path>` pins it to
 one instead.
+
+### The map hook (recommended)
+
+The tools above are *pull*: they answer when asked, and only if you think to ask. Going
+straight to grep means never learning the graph exists — and by then the cost this is meant
+to remove has already been paid.
+
+This hook makes it *push*: the structure map is placed in front of the agent at the start of
+every turn, before it decides how to explore anything. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/skills/code-graph/scripts/hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+It prints nothing for a project with no graph, and it exits 0 on every failure path —
+including a corrupt store or unreadable input. That is deliberate: a `UserPromptSubmit` hook
+exiting 2 would erase what you typed, and nothing about a design graph is worth that.
+
+The map is capped at 12 KiB and shows only the top level, so it stays cheap enough to keep
+switched on. Everything below the top level is one `show` away.

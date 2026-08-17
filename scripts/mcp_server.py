@@ -13,6 +13,7 @@ like its cause. Diagnostics go to stderr, which the client collects as server lo
 That is why the query functions return strings instead of printing them.
 """
 
+import datetime
 import json
 import os
 import subprocess
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import delta as delta_rules  # noqa: E402
 import graph as graph_lib  # noqa: E402
+import structure_map  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "code-graph"
@@ -146,6 +148,15 @@ TOOLS = [
         },
     },
     {
+        "name": "map",
+        "description": (
+            "The structure map: the whole design at its top level, plus what changed "
+            "recently. This is the same text the session hook shows at the start of a turn "
+            "— call it directly when that hook is not installed."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "bootstrap",
         "description": (
             "Explains how to draw this project's design graph when it has none yet. Read "
@@ -216,6 +227,16 @@ def _tool_users(options, root):
     return content(_with_notes(graph, graph_lib.users(root, graph, path)))
 
 
+def _tool_map(options, root):
+    rendered = structure_map.for_repository(root)
+    if rendered is None:
+        raise graph_lib.GraphUnavailable(
+            f"this project has no design graph yet ({root}).\n"
+            "Call `bootstrap` to draw one."
+        )
+    return content(rendered)
+
+
 def _tool_bootstrap(options, root):
     payload = graph_lib.read_store(root)
     if payload and payload.get("nodes"):
@@ -261,7 +282,7 @@ def _tool_apply_delta(options, root):
             "is a state nobody declared. Fix it and call `apply_delta` again."
         )
 
-    updated = delta_rules.apply(store, plan)
+    updated = delta_rules.apply(store, plan, stamp=_stamp(root))
     written = graph_lib.write_store(root, updated)
     return content(
         f"Delta applied to `{written.relative_to(root)}`: "
@@ -275,9 +296,32 @@ HANDLERS = {
     "find": _tool_find,
     "show": _tool_show,
     "users": _tool_users,
+    "map": _tool_map,
     "bootstrap": _tool_bootstrap,
     "apply_delta": _tool_apply_delta,
 }
+
+
+def _stamp(root):
+    """When a change was recorded, and the commit it sat on if there is one.
+
+    The commit is the one HEAD pointed at while the work was being done — not a commit
+    containing the change, which does not exist yet. It is a coarse anchor for "roughly
+    when", which is all the recent-changes list claims to be.
+    """
+    stamp = {"at": datetime.datetime.now().astimezone().strftime("%Y-%m-%d")}
+    try:
+        found = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            stamp["commit"] = found.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return stamp
 
 
 def call_tool(params, root):
