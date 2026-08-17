@@ -1,70 +1,34 @@
 # code-graph
 
-A Claude Code skill and MCP server for a project's **design graph**: the modules, classes and
-interfaces a codebase is made of, and which of them depend on which.
+**A map of your project, handed to the agent before it starts guessing.**
 
-The graph is **declared, not extracted** — nothing parses your source. That is what lets it
-describe intent rather than syntax, cover code that is not written yet, and stay readable on
-a repository too large to hold in your head.
+code-graph maintains a *design graph* — the modules, classes and interfaces a codebase is
+made of, and which of them depend on which — as one JSON file. It serves that graph over MCP
+and pushes the top level into the agent's context at the start of every turn, so the agent
+knows what the project is made of before it decides where to look. The graph is **declared,
+not parsed out of your source**, which is what lets it describe intent rather than syntax and
+stay readable on a repository too large to hold in your head. Pure Python, standard library
+only, nothing to install.
 
-It answers three questions grep is bad at:
+[Quickstart](#quickstart) •
+[Why](#why) •
+[Install](#install) •
+[The graph](#the-graph) •
+[Tools](#tools) •
+[How it works](#how-it-works) •
+[Verifying it works](#verifying-it-works)
 
-- **Where does this concept live?** → `find`
-- **What is this part for, and what does it lean on?** → `show`
-- **What breaks if I change it?** → `users`
+## Quickstart
 
-Two that keep it true:
-
-- **This project has no graph yet.** → `bootstrap`
-- **My work changed the design.** → `apply_delta`
-
-And one that gets read before the agent decides anything at all:
-
-- **What is this project made of?** → `map`, delivered automatically by the hook below.
-
-## Install
-
-```bash
-git clone https://github.com/FufanLu/CodeGraph.git
-cp -R CodeGraph ~/.claude/skills/code-graph
-claude mcp add --scope user code-graph \
-  -- python3 ~/.claude/skills/code-graph/scripts/mcp_server.py
-```
-
-Python 3 and its standard library are the only requirements. Nothing to install, no service
-to run, no API key. The server operates on whatever repository the session is in, found via
-`git rev-parse`; `--repo <path>` pins it to one instead.
-
-### Push the map, do not wait to be asked
-
-Tools are pull. They answer when asked, and only if the agent thinks to ask — an agent that
-goes straight to grep never learns the graph exists, and by then the cost this is meant to
-remove has already been paid. "The map was available" is no comfort.
-
-The hook makes it push. Add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "*",
-        "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/skills/code-graph/scripts/hook.py" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Every turn now starts with something like:
+With the hook installed, every turn begins with this already in the agent's context — it
+does not have to think to ask for it:
 
 ```markdown
 # example — structure map
 
 2 entries · 4 in the design. This map is **regenerated from `.codegraph/graph.json` every
-turn** and is only an index — read it before exploring the repository, then open what you need.
+turn** and is only an index — read it before exploring the repository, then open what you
+need.
 
 ℹ️ Top level only: 2 deeper entries are held back on purpose, not lost. Open one with
 `show <path>`; the whole graph is on disk in `.codegraph/graph.json`.
@@ -80,79 +44,283 @@ used by: Web (USES)
 - add node `backend` (f60d8b3)
 ```
 
-The hook prints nothing for a project without a graph, and **exits 0 on every failure
-path** — a `UserPromptSubmit` hook that exits 2 erases what the user typed, and nothing
-about a design graph is worth that.
+That is 797 bytes for a four-node project; the cap is 12 KiB no matter how large the graph
+gets. From there the agent opens what it needs:
 
-## How it works
+```
+find storage           # locate nodes by keyword, ANDed
+show backend           # what one part is, what is inside it, what it leans on
+users backend/config   # blast radius — read before changing anything
 
-The graph lives in `.codegraph/graph.json` at the repository root — plain JSON, written
-atomically, meant to be committed so it travels with the repository.
+bootstrap              # this project has no graph; here is how to draw one
+apply_delta            # my work changed the design; record it
+```
+
+Real output, not idealised — note the staleness marker, which is the graph admitting it is
+wrong rather than quietly misleading you:
+
+```
+$ show backend
+backend  MODULE
+title    Backend
+file     src/server/
+summary  http surface
+
+children (2)
+  backend/storage  MODULE  Storage
+  backend/config   MODULE  Config
+
+depends_on (0)
+
+used_by (1)
+  web  MODULE  Web  ⚠ file missing
+```
+
+## Why
+
+### Why use it
+
+- **"Where does this concept live?" costs one call instead of a grep sweep.** `find` searches
+  titles, summaries, slug paths and file locations at once, and answers with the parts rather
+  than with file contents.
+- **"What breaks if I change this?" has an actual answer.** `users` walks reverse edges
+  transitively. Reporting only direct dependents systematically understates the blast radius,
+  which is the mistake this query exists to prevent.
+- **It describes intent, not syntax.** Because the graph is declared, it can say that three
+  directories are one module, and can carry a design that is not fully built yet. No parser
+  gets either of those right.
+- **The agent does not have to remember to use it.** The hook pushes the map. A tool that is
+  merely available is a tool an agent skips on its way to grep.
+
+### Why not use it
+
+- **It can be wrong, and confidently.** Nodes are declared, so one can outlive the code it
+  describes. There is a `⚠ file missing` marker for the obvious case, but nothing detects a
+  module that quietly changed its job. Trust the working tree.
+- **Somebody has to keep it current.** Every change that reshapes the design costs an
+  `apply_delta`. On a project small enough to hold in your head, `ls` and reading files is
+  cheaper than maintaining a map of it.
+- **It stops at classes and interfaces.** No method-level detail, by decision. If your
+  question is "which function computes this", this will not answer it.
+- **It is not a directory tree.** If you want the file layout, `find .` is right there and
+  it is always accurate.
+
+## Install
+
+Python 3.7 or newer (tested on 3.12) and its standard library. No packages, no service, no
+API key.
+
+Steps 1 and 2 are required. Step 3 is what makes it push rather than pull.
+
+1. **Install the skill**
+
+   ```bash
+   git clone https://github.com/FufanLu/CodeGraph.git
+   cp -R CodeGraph ~/.claude/skills/code-graph
+   ```
+
+2. **Register the MCP server**
+
+   <details><summary>Claude Code</summary>
+
+   ```bash
+   claude mcp add --scope user code-graph \
+     -- python3 ~/.claude/skills/code-graph/scripts/mcp_server.py
+   ```
+   </details>
+
+   <details><summary>Any client that reads mcpServers JSON</summary>
+
+   ```json
+   {
+     "mcpServers": {
+       "code-graph": {
+         "command": "python3",
+         "args": ["~/.claude/skills/code-graph/scripts/mcp_server.py"]
+       }
+     }
+   }
+   ```
+   </details>
+
+   The server operates on whatever repository the session is in, located with
+   `git rev-parse`. Pass `--repo <path>` to pin it to one instead.
+
+3. **Install the context hook** <sup>(optional, but it is the whole point)</sup>
+
+   In `~/.claude/settings.json`:
+
+   ```json
+   {
+     "hooks": {
+       "UserPromptSubmit": [
+         {
+           "matcher": "*",
+           "hooks": [
+             { "type": "command", "command": "python3 ~/.claude/skills/code-graph/scripts/hook.py" }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   Put it in a project's `.claude/settings.json` instead to enable it for just that project.
+
+Then check the install, which matters more than usual here because a hook fails silently by
+design:
+
+```bash
+python3 ~/.claude/skills/code-graph/run_tests.py
+```
+
+## The graph
+
+One file, `.codegraph/graph.json` at the repository root. Plain JSON, written atomically,
+meant to be committed — that is how the graph travels with the repository and how a teammate
+gets it for free.
+
+### Nodes
+
+A node is addressed by its **slug path**, and this is the one thing worth getting straight
+before anything else: `path` is an address in the graph, `file` is a location on disk. They
+are not the same field and confusing them is the most common mistake.
 
 ```json
 {
-  "schema_version": 1,
-  "project": "example",
-  "nodes": [
-    {"path": "backend", "kind": "MODULE", "title": "Backend", "summary": "http surface", "file": "src/server/"},
-    {"path": "backend/store", "kind": "CLASS", "title": "Store", "summary": "persists orders", "file": "src/server/db/store.py"}
-  ],
-  "edges": [{"from": "backend/store", "to": "backend/config", "kind": "USES"}]
+  "path": "backend/storage",
+  "kind": "MODULE",
+  "title": "Storage",
+  "summary": "persists orders",
+  "file": "src/server/db/"
 }
 ```
 
-Containment and dependency are stored separately on purpose. Containment is the slug path
-itself — `backend/store` is inside `backend` — so it is a tree, and it is what you navigate
-by. Dependency is the edge list: many to many, free to contain cycles, and it is what you
-query. Drawing both as one relation is how architecture diagrams turn into hairballs.
+`kind` is `MODULE`, `CLASS` or `INTERFACE`. A directory is written with a trailing slash;
+the slash is what separates it from a file of the same name.
 
-Changes arrive one delta at a time, from the work that made them:
+### Edges
+
+Directed, and stored separately from containment.
+
+```json
+{ "from": "backend/storage", "to": "backend/config", "kind": "USES" }
+```
+
+`kind` is `USES` or `EXTENDS`. Containment is the slug path itself — `backend/storage` is
+inside `backend` — so it is a tree you navigate. Dependency is the edge list: many to many,
+free to contain cycles, and it is what you query. Drawing both as one relation is how
+architecture diagrams turn into hairballs.
+
+### Deltas
+
+The graph only ever changes by delta: what one piece of work added, removed or rewired.
 
 ```json
 {
   "schema_version": 1,
   "adds": {
-    "nodes": [{"path": "server/store", "kind": "CLASS", "title": "Store", "summary": "one sentence", "file": "src/store.mjs"}],
+    "nodes": [{"path": "server/store", "kind": "CLASS", "title": "Store", "file": "src/store.mjs"}],
     "edges": [{"from": "server/store", "to": "server/config", "kind": "USES"}]
   },
   "removes": {"nodes": ["server/legacy"], "edges": []}
 }
 ```
 
-## Three design decisions worth knowing
+## Tools
 
-**One broken rule rejects the whole delta.** A delta expresses a single intent — added a
-class, added the edge that gives it meaning. Applying the valid half leaves the node without
-the edge: a state nobody declared and nobody can interpret. Rejecting all of it keeps the
-graph a record of things somebody actually said.
+- `find` — Locate nodes by keyword across title, summary, path and file. Keywords are ANDed.
+  Returns signposts rather than nothing when there are no matches.
+    - `keywords` (string[], required): Terms to match
+- `show` — One node's kind, title, summary, file, direct children, what it depends on and
+  what uses it.
+    - `path` (string, required): Slug path of the node, e.g. `backend/storage`
+- `users` — Everything that depends on a node, directly and transitively. The blast radius.
+    - `path` (string, required): Slug path of the node
+- `map` — The whole design at its top level plus recent changes; the same text the hook
+  delivers. Useful when the hook is not installed.
+- `bootstrap` — How to draw the graph for a project that has none, and what makes a good
+  module. Refuses once a graph exists.
+- `apply_delta` — Validate a change to the graph and record it. Any broken rule rejects the
+  whole delta and writes nothing.
+    - `delta` (object, required): The delta, shaped as above
+
+## How it works
+
+1. **Draw it once.** `bootstrap` returns instructions; the agent reads the repository and
+   calls `apply_delta`. Nothing is scanned or parsed — the agent decides what the modules are,
+   which is the only way to group three directories doing one job into one module.
+2. **Keep it current.** Work that reshapes the design calls `apply_delta` again. Each delta is
+   validated as a whole and recorded with the date and the commit it sat on.
+3. **Read it every turn.** The hook renders the top level into the agent's context, capped at
+   12 KiB, shedding detail in a fixed order — `used by`, then summaries, then history, then
+   entries — and announcing whatever it shed.
+4. **Open what matters.** Anything below the top level is one `show` away, and the map says so
+   rather than pretending it does not exist.
+
+**If the graph is missing or unreadable, nothing breaks.** The hook prints nothing and exits
+0; the tools return an error that says to read the code and carry on. code-graph never blocks
+a turn — a `UserPromptSubmit` hook that exits non-zero would erase what you typed, and nothing
+about a design graph is worth that.
+
+## Verifying it works
+
+The hook is invisible when it succeeds and equally invisible when it never ran, so check it
+deliberately:
+
+1. Restart your client and confirm `code-graph` appears in the tool list (`/mcp` in Claude
+   Code) with six tools.
+2. In a project with no graph, ask the agent to draw one. It should call `bootstrap`, read
+   around, then call `apply_delta` — and `.codegraph/graph.json` should appear.
+3. Ask "what is this project made of?" in a new session. With the hook working, the answer
+   arrives without any tool call at all, because the map is already in context.
+4. Check the hook directly:
+
+   ```bash
+   echo '{"cwd":"'"$PWD"'"}' | python3 ~/.claude/skills/code-graph/scripts/hook.py
+   ```
+
+   A project with a graph prints the map. A project without one prints nothing and exits 0 —
+   that is correct, not a failure.
+
+## Design decisions worth knowing
+
+**Truncation is always explicit.** When something is cut, the output says how much and how to
+narrow the query. Silent truncation is the worst failure available here: a half-listed
+dependency table looks exactly like a complete one, so the reader concludes "nothing else uses
+this" and changes it safely — which is how you break something while believing you checked.
+Same reasoning for why a query matching nothing returns signposts instead of a blank answer.
+
+**"Held back" and "dropped" never share a sentence.** The map shows the top level only, so
+deeper nodes are absent by design — they are in the store, one `show` away. That is not the
+same as the byte budget forcing entries out, which is real loss. Collapsing both into
+"truncated to fit" describes the first as loss, and every project with a second level hits it
+on every turn — teaching the reader the map is lossy and the graph is not worth querying,
+which is exactly backwards.
+
+**One broken rule rejects the whole delta.** A delta expresses a single intent: added a class,
+added the edge that gives it meaning. Applying the valid half leaves the node without the edge
+— a state nobody declared and nobody can interpret.
 
 **There is no redraw.** The graph is maintained by the work that touches the code, so
 redrawing it would discard everything every later change declared. `bootstrap` refuses once a
 graph exists.
 
-**Truncation is always explicit.** Results are budgeted, and when something is cut the output
-says how much and how to narrow the query. Silent truncation is the worst failure available
-here: a half-listed dependency table looks exactly like a complete one, so the reader
-concludes "nothing else uses this" and changes it safely — which is how you break something
-while believing you checked. The same reasoning is why a query that matches nothing still
-returns signposts instead of a blank answer.
+## Troubleshooting
 
-**"Held back" and "dropped" never share a sentence.** The map shows the top level only, so
-deeper nodes are absent by design — they are in the store and one `show` away. That is not
-the same as the byte budget forcing entries out, which is real loss. Collapsing both into
-"truncated to fit" describes the first as loss, and every project with a second level hits it
-on every single turn — teaching the reader that the map is lossy and the graph is not worth
-querying, which is exactly backwards.
+**The tools do not appear.** The MCP server is not registered, or Python is not on the PATH
+your client uses. Run `python3 ~/.claude/skills/code-graph/scripts/mcp_server.py < /dev/null`
+— it should exit 0 silently.
 
-## What it does not do
+**Every node reports `⚠ file missing`.** The server resolved the wrong repository root, so the
+`file` fields are being checked against the wrong directory. Pin it with `--repo <path>`.
 
-- **No method-level detail**, by decision. It would cost an order of magnitude more to
-  maintain, and "which parts are involved" is already answered one level up.
-- **It can go stale.** Nodes are declared, so one can outlive the code it describes. A node
-  whose file is gone from disk is flagged `⚠ file missing`, and an edge naming an unknown
-  node is flagged too. Both mean the graph is wrong on that point — trust the working tree.
-- **It is not a picture of the directory tree.** Two modules may name the same directory. A
-  module is the group of files that does one job, which is not the same thing as a folder.
+**The map never appears.** Most likely the project has no graph — run the hook by hand as
+above. If that prints the map, the hook is not registered; check `~/.claude/settings.json`.
+
+**A delta keeps getting rejected.** The message names the one rule that failed. The usual
+causes are an edge pointing at a node that was never declared, and a `path` that is a file
+path rather than a slug path.
 
 ## Tests
 
@@ -161,5 +329,11 @@ python3 run_tests.py
 ```
 
 Standard library only. The runner refuses to start if any `test_*.py` sits outside the
-collected directories — a test that never runs looks identical to a test that passes, and
-that is the failure mode worth guarding against.
+collected directories — a test that never runs looks identical to a test that passes, and that
+is the failure mode worth guarding against.
+
+## Agent-facing documentation
+
+[`SKILL.md`](SKILL.md) is what the agent reads. It carries the usage discipline — read `users`
+before changing a node, trust the working tree over the graph, declare nothing when your work
+did not change the design. This README is for the human deciding whether to install it.
