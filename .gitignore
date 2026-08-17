@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# This tool's own output, when the repository is used as its own test subject.
+.codegraph/
