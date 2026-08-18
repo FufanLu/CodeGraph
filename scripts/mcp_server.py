@@ -255,6 +255,28 @@ def _tool_bootstrap(options, root):
     )
 
 
+def _empty_store(root):
+    return {
+        "schema_version": delta_rules.SCHEMA_VERSION,
+        "project": root.name,
+        "nodes": [],
+        "edges": [],
+    }
+
+
+def _plan_for(store, payload):
+    current = {node["path"] for node in store["nodes"]}
+    return delta_rules.validate(current, payload, require_file=not current)
+
+
+def _rejected(rejection):
+    return content(
+        f"Delta rejected, nothing was written: {rejection}\n\n"
+        "The whole delta is rejected rather than partly applied, because half an intent "
+        "is a state nobody declared. Fix it and call `apply_delta` again."
+    )
+
+
 def _tool_apply_delta(options, root):
     payload = options.get("delta")
     if isinstance(payload, str):
@@ -265,25 +287,28 @@ def _tool_apply_delta(options, root):
         except json.JSONDecodeError as error:
             return content(f"delta is not valid JSON: {error}", is_error=True)
 
-    store = graph_lib.read_store(root) or {
-        "schema_version": delta_rules.SCHEMA_VERSION,
-        "project": root.name,
-        "nodes": [],
-        "edges": [],
-    }
-    current = {node["path"] for node in store["nodes"]}
-
+    # Checked once before anything is touched, because a rejected delta has to leave the
+    # project exactly as it found it — down to not creating `.codegraph/` for a call that
+    # was never going to write into it.
     try:
-        plan = delta_rules.validate(current, payload, require_file=not current)
+        _plan_for(graph_lib.read_store(root) or _empty_store(root), payload)
     except delta_rules.DeltaRejected as rejection:
-        return content(
-            f"Delta rejected, nothing was written: {rejection}\n\n"
-            "The whole delta is rejected rather than partly applied, because half an intent "
-            "is a state nobody declared. Fix it and call `apply_delta` again."
-        )
+        return _rejected(rejection)
 
-    updated = delta_rules.apply(store, plan, stamp=_stamp(root))
-    written = graph_lib.write_store(root, updated)
+    # Then again for real, with the read and the write inside one lock. Anything narrower
+    # lets a second writer land between them, and everything it declared disappears with
+    # neither caller told a thing.
+    with graph_lib.store_lock(root):
+        store = graph_lib.read_store(root) or _empty_store(root)
+        try:
+            plan = _plan_for(store, payload)
+        except delta_rules.DeltaRejected as rejection:
+            # Another writer changed the graph between the two checks. The one taken under
+            # the lock is the authoritative verdict.
+            return _rejected(rejection)
+
+        updated = delta_rules.apply(store, plan, stamp=_stamp(root))
+        written = graph_lib.write_store(root, updated)
     return content(
         f"Delta applied to `{written.relative_to(root)}`: "
         f"{len(plan['add_nodes'])} node(s) added, {len(plan['add_edges'])} edge(s) added, "

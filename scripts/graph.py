@@ -20,11 +20,19 @@ something useful, because a blank answer reads as a broken tool, and a broken to
 reader back to grepping the whole repository. That is the cost this graph exists to remove.
 """
 
+import contextlib
 import json
+import os
 import unicodedata
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no flock
+    fcntl = None
+
 STORE_PATH = Path(".codegraph") / "graph.json"
+LOCK_NAME = "lock"
 SCHEMA_VERSION = 1
 
 # Output budgets. These measure how much a reader can take in at once, not how wide a
@@ -215,14 +223,61 @@ def read_store(root):
     return payload
 
 
+def prepare_dir(root):
+    """Create `.codegraph/`, and keep its working files out of the reader's `git status`.
+
+    The graph itself is meant to be committed. The lock and the temp files are not, and a
+    project that has to be told to ignore them by hand will carry them in every diff until
+    somebody is.
+    """
+    directory = root / STORE_PATH.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    ignore = directory / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text(f"{LOCK_NAME}\n*.tmp\n", encoding="utf-8")
+    return directory
+
+
+@contextlib.contextmanager
+def store_lock(root):
+    """Hold the store for the whole of one read-modify-write.
+
+    Writing atomically is not enough on its own. Applying a delta reads the graph, changes
+    it in memory and writes all of it back, so two writers that merely take turns at the
+    *write* have both built on the same stale read — and the second one silently discards
+    everything the first declared.
+
+    Do not nest this. The lock is taken on a fresh file description each time, so a second
+    acquisition inside the first would block against itself.
+
+    Where `fcntl` does not exist (Windows), this degrades to no lock at all: concurrent
+    writers can still lose an update there, but they cannot corrupt the store, because each
+    of them writes through a temp file of its own.
+    """
+    handle = open(prepare_dir(root) / LOCK_NAME, "a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        # Closing releases the lock. Done explicitly so that when it is released does not
+        # depend on when the handle happens to be collected.
+        handle.close()
+
+
 def write_store(root, payload):
     """Write the graph, temp file then rename.
 
     The rename is what stops a concurrent reader from ever seeing a half-written graph.
+
+    The temp file carries this process's pid, and that is load-bearing rather than tidy.
+    Under one shared name two writers open the *same* temp file, interleave their bytes into
+    it, and the atomic rename then publishes the mixture — a file that parses as nothing at
+    all, which takes the graph away from every session at once.
     """
     path = root / STORE_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
+    prepare_dir(root)
+    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     temp.replace(path)
     return path
