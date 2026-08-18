@@ -22,6 +22,12 @@ one to open, not enough to answer detailed questions.
   view being trimmed, it is damage, and it is the only one of the three that says the file
   on disk needs fixing.
 
+A fourth thing has to be said here even though it is not absence at all: a node whose
+declared `file` is gone from the repository. `show` marks each one, but only nodes that get
+rendered carry their marker, and this map renders the top level — so a stale node one level
+down would be invisible in the document that is delivered every turn while `show` has known
+about it all along. The count goes in the header for that reason.
+
 Collapsing the first two into "truncated to fit" describes the first as loss. Every project with a
 second level hits the first case on every single turn, so that phrasing teaches the reader
 that the map is lossy and the graph is not worth querying — which is exactly backwards.
@@ -75,7 +81,21 @@ def _ordered(graph):
     return ordered
 
 
-def _render(root, graph, changes, detail, max_depth, skeleton_depth, keep):
+def stale_count(root, graph):
+    """Nodes whose declared `file` is not on disk, at any depth.
+
+    Counted over the whole graph rather than over what is rendered: the rendered set is the
+    top level, and a node one level down is exactly the one whose staleness would otherwise
+    never reach this document.
+    """
+    return sum(
+        1
+        for path in graph.order
+        if graph.nodes[path]["file"] and not (root / graph.nodes[path]["file"]).exists()
+    )
+
+
+def _render(root, graph, changes, detail, max_depth, skeleton_depth, keep, stale=0):
     """One attempt. Higher `detail` is more verbose (3 = everything)."""
     ordered = _ordered(graph)
     held_back = sum(1 for path in graph.order if depth_of(path) > skeleton_depth)
@@ -96,6 +116,15 @@ def _render(root, graph, changes, detail, max_depth, skeleton_depth, keep):
         f"**regenerated from `{graph_lib.STORE_PATH}` every turn** and is only an index — "
         "read it before exploring the repository, then open what you need."
     )
+    if stale:
+        # Not a view being trimmed: the graph is wrong on these, and it is the reader who has
+        # to decide what to believe. Kept in the header for the same reason as the line
+        # below — the last-resort cut trims from the tail.
+        lines += [
+            "",
+            f"⚠️ {stale} node(s) declare a file that is not on disk. The graph is wrong on "
+            "those; `show <path>` marks each one. Trust the working tree.",
+        ]
     if graph.skipped:
         # A third way a node can be absent, and the only one that means the store itself is
         # damaged rather than the view of it trimmed. It is stated in the same words the
@@ -182,10 +211,13 @@ def render(root, graph, changes=(), budget=BUDGET, skeleton_depth=1):
     # Never render deeper than the caller asked for, however deep the graph actually goes.
     deepest = min(max(depth_of(path) for path in graph.order), max(skeleton_depth, 1))
     changes = list(changes)
+    # Once, not once per attempt: this text is paid for on every turn and so is the stat call.
+    stale = stale_count(root, graph)
 
     for detail in (3, 2, 1, 0):
         max_depth = max(1, deepest - 1) if detail == 0 else deepest
-        attempt = _render(root, graph, changes, detail, max_depth, skeleton_depth, len(graph.order))
+        attempt = _render(root, graph, changes, detail, max_depth, skeleton_depth,
+                          len(graph.order), stale)
         if len(attempt.encode("utf-8")) <= budget:
             return attempt
 
@@ -194,7 +226,7 @@ def render(root, graph, changes=(), budget=BUDGET, skeleton_depth=1):
     max_depth = max(1, deepest - 1)
     while keep > 1:
         keep //= 2
-        attempt = _render(root, graph, changes, 0, max_depth, skeleton_depth, keep)
+        attempt = _render(root, graph, changes, 0, max_depth, skeleton_depth, keep, stale)
         if len(attempt.encode("utf-8")) <= budget:
             return attempt
 
@@ -203,7 +235,7 @@ def render(root, graph, changes=(), budget=BUDGET, skeleton_depth=1):
     # oversized string here would hand the caller something it believes was already
     # trimmed. So the last resort is a hard cut, and the cut is announced: silent
     # truncation lets the reader take half a dependency list for the whole of it.
-    last = _render(root, graph, changes, 0, max_depth, skeleton_depth, 1)
+    last = _render(root, graph, changes, 0, max_depth, skeleton_depth, 1, stale)
     if len(last.encode("utf-8")) <= budget:
         return last
     notice = "\n\n⚠️ Cut off here: even one entry does not fit the budget.\n"

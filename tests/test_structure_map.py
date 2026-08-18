@@ -116,6 +116,59 @@ class AbsenceWording(unittest.TestCase):
         self.assertIn("Detail reduced to fit", out)
 
 
+class Staleness(unittest.TestCase):
+    """A node pointing at a file that is gone, which is the graph being wrong rather than trimmed."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "here.py").write_text("", encoding="utf-8")
+
+    def test_a_stale_top_level_node_is_announced(self):
+        out = structure_map.render(self.root, build([node("a", file="src/gone.py")]))
+        self.assertIn("1 node(s) declare a file that is not on disk", out)
+
+    def test_a_stale_child_is_announced_even_though_children_are_not_rendered(self):
+        # The whole reason the count is in the header. The map renders the top level, so a
+        # stale node one level down carries no marker of its own and would otherwise be
+        # invisible in the one document that is delivered on every turn.
+        out = structure_map.render(
+            self.root,
+            build([node("area", file="src/"), node("area/inner", file="src/gone.py")]),
+        )
+        self.assertNotIn("area/inner", out, "children are still held back")
+        self.assertIn("1 node(s) declare a file that is not on disk", out)
+
+    def test_a_graph_that_matches_the_tree_says_nothing(self):
+        out = structure_map.render(self.root, build([node("a", file="src/here.py")]))
+        self.assertNotIn("not on disk", out)
+
+    def test_a_node_with_no_file_at_all_is_not_stale(self):
+        # A grouping node may legitimately have no location; that is not damage.
+        out = structure_map.render(self.root, build([node("a"), node("b", file="src/here.py")]))
+        self.assertNotIn("not on disk", out)
+
+    def test_the_warning_survives_a_budget_squeeze(self):
+        many = [node(f"m{i}", summary="x" * 200, file="src/gone.py") for i in range(200)]
+        out = structure_map.render(self.root, build(many), budget=2000)
+        self.assertIn("declare a file that is not on disk", out)
+        self.assertIn("Truncated to fit", out)
+
+    def test_the_count_covers_the_whole_graph_not_the_rendered_slice(self):
+        nodes = [node("area", file="src/")] + [
+            node(f"area/n{i}", file="src/gone.py") for i in range(3)
+        ]
+        out = structure_map.render(self.root, build(nodes))
+        self.assertIn("3 node(s) declare a file that is not on disk", out)
+
+    def test_it_agrees_with_what_show_marks(self):
+        graph = build([node("a", file="src/gone.py")])
+        self.assertIn("⚠ file missing", graph_lib.show(self.root, graph, "a"))
+        self.assertIn("not on disk", structure_map.render(self.root, graph))
+
+
 class Budget(unittest.TestCase):
     def test_a_large_graph_still_fits(self):
         many = [node(f"m{i}", summary="z" * 400) for i in range(400)]
