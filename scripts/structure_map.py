@@ -13,11 +13,14 @@ meant to remove has already been paid by then. So the map is small enough to sho
 unconditionally, and its job is to be an index: enough to know what the parts are and which
 one to open, not enough to answer detailed questions.
 
-# Two ways a node can be absent, and why they must never share a sentence
+# Three ways a node can be absent, and why they must never share a sentence
 
 - **Held back**: the caller asked for the skeleton only (`skeleton_depth`, normally 1).
   Those nodes are not lost — they are in the store, and `show` opens them.
 - **Dropped**: the byte budget forced the deepest level out. Those really are not here.
+- **Skipped**: the store holds an entry this code could not read at all. That one is not a
+  view being trimmed, it is damage, and it is the only one of the three that says the file
+  on disk needs fixing.
 
 Collapsing both into "truncated to fit" describes the first as loss. Every project with a
 second level hits the first case on every single turn, so that phrasing teaches the reader
@@ -93,6 +96,17 @@ def _render(root, graph, changes, detail, max_depth, skeleton_depth, keep):
         f"**regenerated from `{graph_lib.STORE_PATH}` every turn** and is only an index — "
         "read it before exploring the repository, then open what you need."
     )
+    if graph.skipped:
+        # A third way a node can be absent, and the only one that means the store itself is
+        # damaged rather than the view of it trimmed. It is stated in the same words the
+        # query tools use, and it sits in the header on purpose: the last-resort cut in
+        # `render` trims from the tail, and a warning that disappears exactly when the map
+        # gets lossiest would be worse than not having one.
+        lines += [
+            "",
+            f"⚠️ {graph.skipped} node(s) were skipped: no path, or the wrong shape. The "
+            "store is damaged on those entries and the count above does not include them.",
+        ]
     if cut_by_budget:
         # Real loss, so it gets the warning voice.
         lines += ["", f"⚠️ Truncated to fit: {len(shown)} of {len(shown) + cut_by_budget} entries are shown."]

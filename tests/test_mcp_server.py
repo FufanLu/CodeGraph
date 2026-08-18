@@ -256,6 +256,49 @@ class Tools(unittest.TestCase):
         )
         self.assertIn("1 node(s) were skipped", text_of(self.call("find", {"keywords": ["a"]})))
 
+    def test_map_reports_a_corrupt_store_as_corrupt_and_not_as_missing(self):
+        # "No graph yet, call bootstrap" is the one answer that must not be given here. The
+        # graph exists and is unreadable, and the two situations ask for opposite next
+        # steps — one to draw a map, one to stop trusting the one already there.
+        (self.root / ".codegraph").mkdir()
+        (self.root / ".codegraph" / "graph.json").write_text(
+            '{"nodes": [{"path": "a"', encoding="utf-8"
+        )
+        rendered = text_of(self.call("map"))
+        self.assertIn("not valid JSON", rendered)
+        self.assertNotIn("no design graph yet", rendered)
+
+    def test_map_and_find_tell_the_same_story_about_a_corrupt_store(self):
+        # Two tools reading one file disagreeing about whether it exists is worse than
+        # either answer on its own.
+        (self.root / ".codegraph").mkdir()
+        (self.root / ".codegraph" / "graph.json").write_text("{ broken", encoding="utf-8")
+        for tool, arguments in (("map", {}), ("find", {"keywords": ["a"]})):
+            result = self.call(tool, arguments)
+            self.assertTrue(result["isError"], tool)
+            self.assertIn("not valid JSON", text_of(result), tool)
+
+    def test_map_still_says_bootstrap_when_there_really_is_no_graph(self):
+        result = self.call("map")
+        self.assertTrue(result["isError"])
+        self.assertIn("bootstrap", text_of(result))
+
+    def test_map_reports_skipped_nodes_like_every_other_answer(self):
+        # The map is the one output that is pushed on every turn, so a partial graph read
+        # as a complete one does the most damage here.
+        (self.root / ".codegraph").mkdir()
+        (self.root / ".codegraph" / "graph.json").write_text(
+            json.dumps(
+                {
+                    "project": "demo",
+                    "nodes": [{"path": "a", "kind": "MODULE", "title": "A"}, {"kind": "MODULE"}],
+                    "edges": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("1 node(s) were skipped", text_of(self.call("map")))
+
 
 class Bootstrap(unittest.TestCase):
     def setUp(self):

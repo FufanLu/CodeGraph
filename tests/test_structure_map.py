@@ -93,6 +93,23 @@ class AbsenceWording(unittest.TestCase):
         out = structure_map.render(NOWHERE, build(many), budget=2000)
         self.assertIn("Truncated to fit", out)
 
+    def test_a_skipped_node_is_announced_rather_than_quietly_uncounted(self):
+        # A third way a node can be absent, and the only one that means the store itself is
+        # damaged. The count in the header excludes it, so without this line nothing in the
+        # document would let a reader notice.
+        out = structure_map.render(NOWHERE, build([node("a"), {"kind": "MODULE"}]))
+        self.assertIn("1 node(s) were skipped", out)
+
+    def test_a_clean_graph_says_nothing_about_skipped_nodes(self):
+        self.assertNotIn("skipped", structure_map.render(NOWHERE, build([node("a")])))
+
+    def test_the_skipped_warning_survives_a_budget_squeeze(self):
+        # It sits in the header for this reason: the last-resort cut trims from the tail,
+        # and a warning that is dropped exactly when the map gets lossiest is worthless.
+        many = [node(f"m{i}", summary="x" * 200) for i in range(200)] + [{"kind": "MODULE"}]
+        out = structure_map.render(NOWHERE, build(many), budget=2000)
+        self.assertIn("1 node(s) were skipped", out)
+
     def test_dropped_detail_is_announced(self):
         many = [node(f"m{i}", summary="y" * 300) for i in range(60)]
         out = structure_map.render(NOWHERE, build(many), budget=3000)

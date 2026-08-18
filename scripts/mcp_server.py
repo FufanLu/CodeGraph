@@ -228,10 +228,23 @@ def _tool_users(options, root):
 
 
 def _tool_map(options, root):
-    rendered = structure_map.for_repository(root)
-    if rendered is None:
+    # Read the store here rather than going through `structure_map.for_repository`. That
+    # helper answers `None` for a graph that is missing *and* for one that cannot be read,
+    # which is right for the hook — it has to stay silent either way — and wrong for a tool
+    # somebody called on purpose. "No graph yet, call bootstrap" and "the store is corrupt,
+    # do not draw conclusions from it" ask for opposite next steps, and answering the first
+    # when the second is true sends the reader off to redraw a map they still have.
+    payload = graph_lib.read_store(root)
+    if payload is None:
         raise graph_lib.GraphUnavailable(
             f"this project has no design graph yet ({root}).\n"
+            "Call `bootstrap` to draw one."
+        )
+    graph = graph_lib.from_payload(payload)
+    rendered = structure_map.render(root, graph, payload.get("changes", []))
+    if rendered is None:
+        raise graph_lib.GraphUnavailable(
+            f"this project\'s design graph is empty ({root}).\n"
             "Call `bootstrap` to draw one."
         )
     return content(rendered)
