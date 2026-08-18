@@ -107,8 +107,11 @@ used_by (1)
 
 ## Install
 
-Python 3.7 or newer (tested on 3.12) and its standard library. No packages, no service, no
-API key.
+Python 3.9 or newer and its standard library. No packages, no service, no API key.
+
+3.9 is the floor because it is the oldest version the test suite is run against on every
+push — on Linux, macOS and Windows. Older ones may well work; nothing checks them, so
+nothing claims them.
 
 Steps 1 and 2 are required. Step 3 is what makes it push rather than pull.
 
@@ -338,6 +341,15 @@ path rather than a slug path.
 ```bash
 python3 run_tests.py
 ```
+
+CI runs the same command on Linux, macOS and Windows, across Python 3.9 to 3.13. Windows is
+there for a specific reason: `fcntl` does not exist on it, so the store lock degrades to
+nothing, and the guarantee that survives without it — that concurrent writers cannot leave
+the store unreadable — is checked separately from the one that does not.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
 
 Standard library only. The runner refuses to start if any `test_*.py` sits outside the
 collected directories — a test that never runs looks identical to a test that passes, and that

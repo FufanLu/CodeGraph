@@ -1,0 +1,39 @@
+# The test suite is the only gate this repository has, so it runs everywhere the code
+# claims to work rather than only where it was written.
+#
+# Windows is in the matrix on purpose, not for coverage: `fcntl` does not exist there, so
+# the store lock degrades to nothing and the concurrency test that depends on it skips
+# itself. What must still hold on that platform — that two writers cannot leave the store
+# unreadable — is a separate test, and this is what checks that the split is real.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+        include:
+          # The versions in between, on one platform, so the matrix stays small without
+          # leaving a gap the code could break in unnoticed.
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # No install step: standard library only, and a dependency creeping in should show
+      # up here as a failure rather than be quietly satisfied.
+      - run: python run_tests.py

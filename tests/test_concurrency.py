@@ -18,6 +18,9 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parents[1]
 SERVER = SKILL / "scripts" / "mcp_server.py"
+sys.path.insert(0, str(SKILL / "scripts"))
+
+import graph as graph_lib  # noqa: E402
 
 # Enough writers that overlap is certain rather than lucky.
 WRITERS = 8
@@ -66,7 +69,8 @@ class ConcurrentWriters(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout
 
-    def test_concurrent_writers_leave_a_readable_store_holding_every_node(self):
+    def race(self):
+        """Run WRITERS deltas at once and return the store they left behind."""
         writers = [
             subprocess.Popen(
                 [sys.executable, str(SERVER), "--repo", str(self.root)],
@@ -85,19 +89,30 @@ class ConcurrentWriters(unittest.TestCase):
             self.assertEqual(writer.wait(timeout=60), 0)
             writer.stdout.close()
             writer.stderr.close()
+        return (self.root / ".codegraph" / "graph.json").read_text(encoding="utf-8")
 
-        store = self.root / ".codegraph" / "graph.json"
+    def test_the_store_is_still_readable_afterwards(self):
+        """True on every platform, because it does not depend on the lock.
+
+        A shared temp name let two writers interleave their bytes into one file, and the
+        atomic rename then published the mixture. Per-writer temp files fix that with no
+        help from `fcntl`, which is why this assertion is not skipped anywhere.
+        """
         try:
-            payload = json.loads(store.read_text(encoding="utf-8"))
+            json.loads(self.race())
         except json.JSONDecodeError as error:
             self.fail(f"concurrent writers corrupted the store: {error}")
 
-        paths = {node["path"] for node in payload["nodes"]}
+    @unittest.skipIf(
+        graph_lib.fcntl is None, "no flock here, so the lock degrades to nothing by design"
+    )
+    def test_no_writer_is_lost_where_the_store_can_be_locked(self):
+        paths = {node["path"] for node in json.loads(self.race())["nodes"]}
         missing = sorted({f"root/node-{index}" for index in range(WRITERS)} - paths)
         self.assertFalse(missing, f"writes were lost: {missing}")
 
     def test_no_temporary_file_is_left_behind(self):
-        # A shared temp name is what lets two writers interleave into one file, so a
+        # A shared temp name is what let two writers interleave into one file, so a
         # leftover one is worth catching on its own.
         self.apply(add_node("root/one", "One"))
         strays = sorted(p.name for p in (self.root / ".codegraph").glob("*.tmp"))
