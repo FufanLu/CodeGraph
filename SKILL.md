@@ -36,7 +36,7 @@ and how to narrow the query — a truncated list is never presented as if it wer
 
 - **`bootstrap`** — call this when a project has no graph. It explains what to draw and what
   makes a good module. Read the repository, then call `apply_delta`.
-- **`apply_delta`** — declare what your work added, removed or rewired.
+- **`apply_delta`** — declare what your work added, removed, rewired or reworded.
 
 ```json
 {
@@ -45,9 +45,17 @@ and how to narrow the query — a truncated list is never presented as if it wer
     "nodes": [{"path": "server/store", "kind": "CLASS", "title": "Store", "summary": "one sentence", "file": "src/store.mjs"}],
     "edges": [{"from": "server/store", "to": "server/config", "kind": "USES"}]
   },
+  "updates": {"nodes": [{"path": "server/config", "summary": "a better sentence"}]},
   "removes": {"nodes": ["server/legacy"], "edges": []}
 }
 ```
+
+**To correct what an existing node says, use `updates` — never remove it and add it back.**
+An update changes `kind`, `title`, `summary` or `file` and leaves the node's edges standing.
+Removing a node takes every edge touching it as well, so spelling a reworded summary as a
+removal costs the graph every dependency that node had. `path` is the node's address and an
+update cannot change it: a different path is a different node, which really is a removal and
+an addition.
 
 Node kind is `MODULE`, `CLASS` or `INTERFACE`; edge kind is `EXTENDS` or `USES`. A node's
 parent must already exist or appear earlier in the same delta, and both ends of every edge

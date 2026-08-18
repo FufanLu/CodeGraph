@@ -168,7 +168,9 @@ TOOLS = [
         "name": "apply_delta",
         "description": (
             "Validate a change to the design graph and record it: what your work added, "
-            "removed or rewired. Any broken rule rejects the whole delta and writes nothing."
+            "removed, rewired or reworded. Use `updates` to correct an existing node — "
+            "removing and re-adding it takes all of its edges with it. Any broken rule "
+            "rejects the whole delta and writes nothing."
         ),
         "inputSchema": {
             "type": "object",
@@ -177,7 +179,8 @@ TOOLS = [
                     "type": "object",
                     "description": (
                         'Shape: {"schema_version": 1, "adds": {"nodes": [...], "edges": '
-                        '[...]}, "removes": {"nodes": [...], "edges": [...]}}'
+                        '[...]}, "updates": {"nodes": [{"path": "...", "summary": "..."}]}, '
+                        '"removes": {"nodes": [...], "edges": [...]}}'
                     ),
                 }
             },
@@ -320,14 +323,39 @@ def _tool_apply_delta(options, root):
             # the lock is the authoritative verdict.
             return _rejected(rejection)
 
+        # Counted before the change is applied, because afterwards there is nothing left
+        # to count: these are the edges that go with a removed node, and the caller never
+        # named them.
+        cascaded = delta_rules.cascade_edges(store, plan)
         updated = delta_rules.apply(store, plan, stamp=_stamp(root))
         written = graph_lib.write_store(root, updated)
-    return content(
+
+    lines = [
         f"Delta applied to `{written.relative_to(root)}`: "
         f"{len(plan['add_nodes'])} node(s) added, {len(plan['add_edges'])} edge(s) added, "
-        f"{len(plan['remove_nodes'])} node(s) removed, {len(plan['remove_edges'])} edge(s) "
-        f"removed. The graph now has {len(updated['nodes'])} node(s)."
-    )
+        f"{len(plan['update_nodes'])} node(s) updated, "
+        f"{len(plan['remove_nodes'])} node(s) removed, "
+        f"{len(plan['remove_edges']) + len(cascaded)} edge(s) removed. "
+        f"The graph now has {len(updated['nodes'])} node(s)."
+    ]
+    if cascaded:
+        # Named one by one rather than counted. The reader is the only one who knows which
+        # of these still hold, and they cannot re-declare what they were never shown.
+        shown = cascaded[:graph_lib.LIST_LIMIT]
+        lines.append("")
+        lines.append(
+            f"{len(cascaded)} of those edge(s) went with a removed node rather than being "
+            "asked for. Re-declare any that still hold:"
+        )
+        lines += [f"  {e['from']} >{e['kind']}> {e['to']}" for e in shown]
+        if len(cascaded) > len(shown):
+            lines.append(f"  … {len(cascaded) - len(shown)} more, all of them in the graph\'s history")
+        lines.append("")
+        lines.append(
+            "To change what a node says without this happening, use `updates` instead of "
+            "removing and re-adding it."
+        )
+    return content("\n".join(lines))
 
 
 HANDLERS = {

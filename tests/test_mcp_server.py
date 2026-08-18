@@ -256,6 +256,46 @@ class Tools(unittest.TestCase):
         )
         self.assertIn("1 node(s) were skipped", text_of(self.call("find", {"keywords": ["a"]})))
 
+    def wired(self):
+        """backend, two children, and one edge between them."""
+        self.call("apply_delta", {"delta": self.first_delta()})
+        self.call("apply_delta", {"delta": {
+            "schema_version": 1,
+            "adds": {
+                "nodes": [
+                    {"path": "backend/store", "kind": "MODULE", "title": "Store"},
+                    {"path": "backend/config", "kind": "MODULE", "title": "Config"},
+                ],
+                "edges": [{"from": "backend/store", "to": "backend/config", "kind": "USES"}],
+            },
+        }})
+
+    def test_replacing_a_node_says_which_edges_went_with_it(self):
+        # This used to report "0 edge(s) removed" while dropping the edge, on what was the
+        # only way to edit a node at the time.
+        self.wired()
+        result = text_of(self.call("apply_delta", {"delta": {
+            "schema_version": 1,
+            "removes": {"nodes": ["backend/store"]},
+            "adds": {"nodes": [
+                {"path": "backend/store", "kind": "MODULE", "title": "Store", "summary": "new"}
+            ]},
+        }}))
+        self.assertIn("1 edge(s) removed", result)
+        self.assertIn("backend/store >USES> backend/config", result)
+
+    def test_an_update_edits_the_node_without_disturbing_its_edges(self):
+        self.wired()
+        result = text_of(self.call("apply_delta", {"delta": {
+            "schema_version": 1,
+            "updates": {"nodes": [{"path": "backend/store", "summary": "persists orders"}]},
+        }}))
+        self.assertIn("1 node(s) updated", result)
+        self.assertIn("0 edge(s) removed", result)
+        shown = text_of(self.call("show", {"path": "backend/store"}))
+        self.assertIn("persists orders", shown)
+        self.assertIn("backend/config", shown)
+
     def test_map_reports_a_corrupt_store_as_corrupt_and_not_as_missing(self):
         # "No graph yet, call bootstrap" is the one answer that must not be given here. The
         # graph exists and is unreadable, and the two situations ask for opposite next

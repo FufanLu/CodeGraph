@@ -214,7 +214,8 @@ architecture diagrams turn into hairballs.
 
 ### Deltas
 
-The graph only ever changes by delta: what one piece of work added, removed or rewired.
+The graph only ever changes by delta: what one piece of work added, removed, rewired or
+reworded.
 
 ```json
 {
@@ -223,9 +224,19 @@ The graph only ever changes by delta: what one piece of work added, removed or r
     "nodes": [{"path": "server/store", "kind": "CLASS", "title": "Store", "file": "src/store.mjs"}],
     "edges": [{"from": "server/store", "to": "server/config", "kind": "USES"}]
   },
+  "updates": {"nodes": [{"path": "server/config", "summary": "a better sentence"}]},
   "removes": {"nodes": ["server/legacy"], "edges": []}
 }
 ```
+
+`updates` is how an existing node is corrected, and using it rather than a remove-and-add is
+not a style preference: removing a node takes every edge touching it with it, so rewording a
+summary the long way costs the graph every dependency that node had. An update changes
+`kind`, `title`, `summary` or `file` and leaves the edges standing. It cannot change `path`
+— that is the node's address, and a different one is a different node.
+
+When a removal does take edges down, the reply names them one by one, so they can be
+re-declared if they still hold.
 
 ## Tools
 

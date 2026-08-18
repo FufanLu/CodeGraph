@@ -30,6 +30,11 @@ def edge(source, target, kind="USES"):
     return {"from": source, "to": target, "kind": kind}
 
 
+def with_updates(delta, nodes):
+    delta["updates"] = {"nodes": list(nodes)}
+    return delta
+
+
 class Validate(unittest.TestCase):
     def reject(self, current, delta, needle, **options):
         with self.assertRaises(delta_rules.DeltaRejected) as caught:
@@ -179,6 +184,57 @@ class FileLocation(unittest.TestCase):
         self.assertIn("has no `file`", str(caught.exception))
 
 
+class Updates(unittest.TestCase):
+    """Changing what a node says without taking its edges down with it.
+
+    Before this existed the only way to fix a summary was to remove the node and add it
+    back, which silently discarded every edge that node had — the graph losing exactly the
+    facts it is kept for, as the price of a typo.
+    """
+
+    def plan(self, current, nodes):
+        return delta_rules.validate(set(current), with_updates(marker(), nodes))
+
+    def reject(self, current, nodes, needle):
+        with self.assertRaises(delta_rules.DeltaRejected) as caught:
+            self.plan(current, nodes)
+        self.assertIn(needle, str(caught.exception))
+
+    def test_a_summary_can_be_rewritten(self):
+        plan = self.plan({"a"}, [{"path": "a", "summary": "what it is for"}])
+        self.assertEqual(plan["update_nodes"], [{"path": "a", "summary": "what it is for"}])
+
+    def test_the_target_must_exist(self):
+        self.reject(set(), [{"path": "a", "summary": "x"}], "no such node")
+
+    def test_a_node_removed_by_the_same_delta_cannot_be_updated(self):
+        delta = with_updates(marker(removes_nodes=["a"]), [{"path": "a", "summary": "x"}])
+        with self.assertRaises(delta_rules.DeltaRejected) as caught:
+            delta_rules.validate({"a"}, delta)
+        self.assertIn("no such node", str(caught.exception))
+
+    def test_an_update_naming_nothing_to_change_is_rejected(self):
+        # It reads as an intent that was lost on the way, not as a no-op worth applying.
+        self.reject({"a"}, [{"path": "a"}], "nothing to update")
+
+    def test_an_unknown_field_is_rejected(self):
+        self.reject({"a"}, [{"path": "a", "colour": "red"}], "unknown field")
+
+    def test_a_bad_kind_is_rejected(self):
+        self.reject({"a"}, [{"path": "a", "kind": "PACKAGE"}], "expected one of")
+
+    def test_an_empty_title_is_rejected(self):
+        self.reject({"a"}, [{"path": "a", "title": "  "}], "no title")
+
+    def test_a_file_outside_the_repository_is_rejected(self):
+        self.reject({"a"}, [{"path": "a", "file": "../etc/passwd"}], "not a location inside")
+
+    def test_a_file_can_be_cleared(self):
+        # A grouping node may legitimately have no location of its own.
+        plan = self.plan({"a"}, [{"path": "a", "file": None}])
+        self.assertEqual(plan["update_nodes"][0]["file"], None)
+
+
 class Apply(unittest.TestCase):
     def store(self):
         return {"project": "demo", "nodes": [], "edges": []}
@@ -200,6 +256,44 @@ class Apply(unittest.TestCase):
         self.assertEqual(len(first["edges"]), 1)
         second = self.build({"a", "b"}, marker(removes_nodes=["b"]), store=first)
         self.assertEqual(second["edges"], [])
+
+    def test_edges_taken_by_a_removed_node_are_counted_not_silently_dropped(self):
+        first = self.build(set(), marker([node("a"), node("b")], [edge("a", "b")]))
+        plan = delta_rules.validate({"a", "b"}, marker(removes_nodes=["b"]))
+        cascaded = delta_rules.cascade_edges(first, plan)
+        self.assertEqual([(e["from"], e["to"]) for e in cascaded], [("a", "b")])
+
+    def test_an_edge_cannot_be_named_for_removal_alongside_its_own_node(self):
+        # Both endpoints of a named edge must survive the delta, so a cascaded edge can
+        # never also be a named one. That is what lets `cascade_edges` skip deduplicating.
+        with self.assertRaises(delta_rules.DeltaRejected) as caught:
+            delta_rules.validate(
+                {"a", "b"}, marker(removes_nodes=["b"], removes_edges=[edge("a", "b")])
+            )
+        self.assertIn("not in the graph", str(caught.exception))
+
+    def test_a_cascaded_removal_is_written_into_the_history(self):
+        # Otherwise "Recent changes" says the node went and stays silent about the edges,
+        # which is the same untruth one layer down.
+        first = self.build(set(), marker([node("a"), node("b")], [edge("a", "b")]))
+        second = self.build({"a", "b"}, marker(removes_nodes=["b"]), store=first)
+        edges = [c["target_ref"] for c in second["changes"] if c["target_kind"] == "edge"]
+        self.assertIn("a>USES>b", edges)
+
+    def test_an_update_changes_the_node_and_leaves_its_edges_standing(self):
+        first = self.build(set(), marker([node("a"), node("b")], [edge("a", "b")]))
+        plan = delta_rules.validate({"a", "b"}, with_updates(marker(), [{"path": "a", "summary": "new"}]))
+        second = delta_rules.apply(first, plan)
+        self.assertEqual(second["nodes"][0]["summary"], "new")
+        self.assertEqual(len(second["edges"]), 1)
+
+    def test_an_update_is_recorded_in_the_history(self):
+        first = self.build(set(), marker([node("a")]))
+        plan = delta_rules.validate({"a"}, with_updates(marker(), [{"path": "a", "title": "A2"}]))
+        second = delta_rules.apply(first, plan)
+        self.assertIn(("update", "node", "a"), [
+            (c["op"], c["target_kind"], c["target_ref"]) for c in second["changes"]
+        ])
 
     def test_removing_an_edge_leaves_its_nodes_alone(self):
         first = self.build(set(), marker([node("a"), node("b")], [edge("a", "b")]))
