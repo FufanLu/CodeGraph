@@ -78,7 +78,15 @@ refuses once a graph exists.
 
 `.codegraph/graph.json` at the repository root, found via `git rev-parse`. It is plain JSON,
 written atomically, and meant to be committed — that is how the graph travels with the
-repository and how a teammate gets it for free.
+repository and how a teammate gets it for free. A worktree is its own repository root, so it
+carries its own graph; a branch carries whatever it committed.
+
+**When a merge leaves this file conflicted, never hand-edit the JSON.** A merge driver
+resolves the file as data — nodes by `path`, edges as a set, history unioned — and only stops
+when both branches rewrote the *same* node differently. When it stops it keeps our side, says
+which paths disagreed, and leaves valid JSON behind. Re-declare those paths with
+`apply_delta` and stage the file. If the file does hold conflict markers, the driver is not
+installed on this clone: take either side whole, then re-declare what the other side added.
 
 ## What the graph does not tell you
 
