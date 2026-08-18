@@ -22,7 +22,7 @@ one to open, not enough to answer detailed questions.
   view being trimmed, it is damage, and it is the only one of the three that says the file
   on disk needs fixing.
 
-Collapsing both into "truncated to fit" describes the first as loss. Every project with a
+Collapsing the first two into "truncated to fit" describes the first as loss. Every project with a
 second level hits the first case on every single turn, so that phrasing teaches the reader
 that the map is lossy and the graph is not worth querying — which is exactly backwards.
 

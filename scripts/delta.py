@@ -237,7 +237,7 @@ def validate(current, marker, require_file=False):
             raise DeltaRejected(f"`{path}` has a summary that is not text")
         # `None` is allowed and means "this node has no location of its own", which a
         # grouping node legitimately does not.
-        if spec.get("file") is not None and "file" in spec and not valid_repo_location(spec["file"]):
+        if spec.get("file") is not None and not valid_repo_location(spec["file"]):
             raise DeltaRejected(
                 f"`{path}` says it lives at `{spec['file']}`, which is not a location "
                 "inside the repository (relative, forward slashes, no `.` or `..` segment; "

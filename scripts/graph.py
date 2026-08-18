@@ -228,7 +228,7 @@ def prepare_dir(root):
 
     The graph itself is meant to be committed. The lock and the temp files are not, and a
     project that has to be told to ignore them by hand will carry them in every diff until
-    somebody is.
+    somebody does.
     """
     directory = root / STORE_PATH.parent
     directory.mkdir(parents=True, exist_ok=True)
