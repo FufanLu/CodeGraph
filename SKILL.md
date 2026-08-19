@@ -1,6 +1,6 @@
 ---
 name: code-graph
-description: Query and maintain a project's design graph — the modules, classes and interfaces it is made of, and which of them depend on which — instead of grepping the repository. Use it to locate the code that owns a concept, to read what a part is for, to find out what a change would affect before making it, and to draw the graph for a project that has none.
+description: Query and maintain a project's design graph — the modules, classes and interfaces it is made of, and which of them depend on which — instead of grepping the repository. Use it to locate the code that owns a concept, to read what a part is for, to find out what a change would affect before making it, to correct the graph when the code you read says otherwise, and to draw one for a project that has none.
 ---
 
 # Design Graph
@@ -65,6 +65,24 @@ directory written with a trailing slash, or a single file.
 **Most work does not change the design. Declare nothing when yours does not.** A rename, a
 bug fix, a new test usually has nothing to say here. A delta records intent, so an empty one
 is the honest answer most of the time.
+
+## Correcting what the graph says
+
+Declaring your own work is only half of it. **A node describing code you have just read is
+the one place anyone can tell whether it is true — and if what you read contradicts it, you
+are the one holding the evidence.** Correct it with `updates` there and then. You do not need
+to be changing that module; you need to have read it.
+
+Correct on evidence, never on taste. "This summary reads awkwardly" is not a correction.
+"This crate defines no traits, and the summary calls it the ports every provider implements"
+is — that one was real, and an agent trusting the wrong summary planned a change around
+traits that do not exist. The same goes for an edge: a declared dependency you can see the
+code does not have is a fact about nothing, and `removes.edges` takes it out.
+
+A wrong node is worse than a missing one. A missing node sends the reader to the code; a
+wrong one sends them away from it, confident. So this is not tidying to do when you have
+spare time — it is the cheapest thing in this skill and the highest-leverage: one `updates`
+call, no new reading, and it stops the next reader from inheriting your predecessor's guess.
 
 **One broken rule rejects the whole delta and writes nothing.** Deliberate: applying the
 valid half would leave the node without the edge that gave it meaning — a state nobody
